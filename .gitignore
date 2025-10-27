@@ -1,0 +1,8 @@
+.env
+local_config.yaml
+/__pycache__
+/assets
+*.pyc
+Create_wkts_streamlit.py
+Create_wkt_dash
+*.html
