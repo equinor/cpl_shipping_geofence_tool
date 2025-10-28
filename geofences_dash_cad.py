@@ -125,8 +125,15 @@ app.validation_layout = html.Div(
         html.Button(id="delete-btn"),
         html.Button(id="export-trajectory-btn"),
         html.Button(id="export-table-btn"),
+        html.Button(id="generate-chart-btn"),
         dcc.Input(id="duration"),
         dcc.Dropdown(id="vessel-dropdown"),
+        dcc.Dropdown(id="chart-type-dropdown"),
+        dcc.Dropdown(id="x-axis-dropdown"),
+        dcc.Dropdown(id="y-axis-dropdown"),
+        dcc.Dropdown(id="aggregation-dropdown"),
+        dcc.Dropdown(id="color-dropdown"),
+        dcc.Graph(id="dynamic-chart"),
         dl.Map(id="map_2"),
         dcc.Store(id="selected-geofence"),
         dcc.Store(id="trajectory-data"),
@@ -216,6 +223,7 @@ def render_content(tab):
                         id="delete-btn",
                         n_clicks=0,
                         disabled=not ENABLE_DELETE_BUTTON,
+                        title="Enable Delete from utils",
                         style={
                             "backgroundColor": "#ff4d4d"
                             if ENABLE_DELETE_BUTTON
@@ -469,6 +477,159 @@ def render_content(tab):
                         style_cell={"textAlign": "left"},
                         style_header={"fontWeight": "bold"},
                     ),
+                    # Dynamic Plotting Section
+                    html.Hr(),
+                    html.H3("Dynamic Chart Builder", style={"marginTop": "20px"}),
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.Label(
+                                        "Chart Type:",
+                                        style={
+                                            "fontWeight": "bold",
+                                            "marginRight": "10px",
+                                        },
+                                    ),
+                                    dcc.Dropdown(
+                                        id="chart-type-dropdown",
+                                        options=[
+                                            {"label": "Bar Chart", "value": "bar"},
+                                            {"label": "Line Chart", "value": "line"},
+                                            {
+                                                "label": "Scatter Plot",
+                                                "value": "scatter",
+                                            },
+                                            {"label": "Pie Chart", "value": "pie"},
+                                            {"label": "Box Plot", "value": "box"},
+                                            {
+                                                "label": "Histogram",
+                                                "value": "histogram",
+                                            },
+                                        ],
+                                        value="bar",
+                                        style={"width": "200px"},
+                                    ),
+                                ],
+                                style={
+                                    "display": "inline-block",
+                                    "marginRight": "20px",
+                                },
+                            ),
+                            html.Div(
+                                [
+                                    html.Label(
+                                        "X-Axis:",
+                                        style={
+                                            "fontWeight": "bold",
+                                            "marginRight": "10px",
+                                        },
+                                    ),
+                                    dcc.Dropdown(
+                                        id="x-axis-dropdown",
+                                        options=[],  # Will be populated dynamically
+                                        value=None,
+                                        style={"width": "200px"},
+                                    ),
+                                ],
+                                style={
+                                    "display": "inline-block",
+                                    "marginRight": "20px",
+                                },
+                            ),
+                            html.Div(
+                                [
+                                    html.Label(
+                                        "Y-Axis Column:",
+                                        style={
+                                            "fontWeight": "bold",
+                                            "marginRight": "10px",
+                                        },
+                                    ),
+                                    dcc.Dropdown(
+                                        id="y-axis-dropdown",
+                                        options=[],  # Will be populated dynamically
+                                        value=None,
+                                        style={"width": "180px"},
+                                    ),
+                                ],
+                                style={
+                                    "display": "inline-block",
+                                    "marginRight": "20px",
+                                },
+                            ),
+                            html.Div(
+                                [
+                                    html.Label(
+                                        "Aggregation:",
+                                        style={
+                                            "fontWeight": "bold",
+                                            "marginRight": "10px",
+                                        },
+                                    ),
+                                    dcc.Dropdown(
+                                        id="aggregation-dropdown",
+                                        options=[
+                                            {"label": "Count", "value": "count"},
+                                            {"label": "Sum", "value": "sum"},
+                                            {"label": "Average", "value": "mean"},
+                                            {"label": "Min", "value": "min"},
+                                            {"label": "Max", "value": "max"},
+                                        ],
+                                        value="count",
+                                        style={"width": "150px"},
+                                    ),
+                                ],
+                                style={
+                                    "display": "inline-block",
+                                    "marginRight": "20px",
+                                },
+                            ),
+                            html.Div(
+                                [
+                                    html.Label(
+                                        "Color By:",
+                                        style={
+                                            "fontWeight": "bold",
+                                            "marginRight": "10px",
+                                        },
+                                    ),
+                                    dcc.Dropdown(
+                                        id="color-dropdown",
+                                        options=[],  # Will be populated dynamically
+                                        value=None,
+                                        style={"width": "200px"},
+                                    ),
+                                ],
+                                style={
+                                    "display": "inline-block",
+                                    "marginRight": "20px",
+                                },
+                            ),
+                            html.Div(
+                                [
+                                    html.Button(
+                                        "Generate Chart",
+                                        id="generate-chart-btn",
+                                        n_clicks=0,
+                                        style={
+                                            "backgroundColor": "#007bff",
+                                            "color": "white",
+                                            "border": "none",
+                                            "padding": "8px 16px",
+                                            "borderRadius": "4px",
+                                            "cursor": "pointer",
+                                            "marginTop": "23px",
+                                        },
+                                    )
+                                ],
+                                style={"display": "inline-block"},
+                            ),
+                        ],
+                        style={"marginBottom": "20px"},
+                    ),
+                    # Chart Display Area
+                    dcc.Graph(id="dynamic-chart", style={"height": "500px"}),
                     dcc.Interval(id="refresh", interval=15 * 1000, n_intervals=0),
                     dcc.Store(id="selected-geofence"),
                     dcc.Store(id="trajectory-data"),
@@ -940,6 +1101,315 @@ def export_table(n_clicks, table_data):
     filename = f"geofence_cargo_data_{timestamp}.csv"
 
     return {"content": csv_string, "filename": filename}
+
+
+# Dynamic Chart Callbacks
+@app.callback(
+    [
+        Output("x-axis-dropdown", "options"),
+        Output("y-axis-dropdown", "options"),
+        Output("color-dropdown", "options"),
+    ],
+    Input("geofence-table", "data"),
+    prevent_initial_call=True,
+)
+def update_dropdown_options(table_data):
+    """Update dropdown options based on available table columns."""
+    if not table_data:
+        return [], [], []
+
+    # Get all column names from the first row
+    if table_data:
+        columns = list(table_data[0].keys())
+
+        # Create options for dropdowns
+        text_columns = [
+            col
+            for col in columns
+            if col not in ["date_diff", "quantity", "exit_heading"]
+        ]
+        numeric_columns = [
+            col for col in columns if col in ["date_diff", "quantity", "exit_heading"]
+        ]
+        all_columns = columns
+
+        text_options = [
+            {"label": col.replace("_", " ").title(), "value": col}
+            for col in text_columns
+        ]
+        numeric_options = [
+            {"label": col.replace("_", " ").title(), "value": col}
+            for col in numeric_columns
+        ]
+        all_options = [
+            {"label": col.replace("_", " ").title(), "value": col}
+            for col in all_columns
+        ]
+
+        return all_options, numeric_options + text_options, text_options
+
+    return [], [], []
+
+
+@app.callback(
+    Output("dynamic-chart", "figure"),
+    [
+        Input("generate-chart-btn", "n_clicks"),
+        Input("chart-type-dropdown", "value"),
+        Input("x-axis-dropdown", "value"),
+        Input("y-axis-dropdown", "value"),
+        Input("aggregation-dropdown", "value"),
+        Input("color-dropdown", "value"),
+    ],
+    State("geofence-table", "data"),
+    prevent_initial_call=True,
+)
+def generate_dynamic_chart(
+    n_clicks, chart_type, x_axis, y_axis, aggregation, color_by, table_data
+):
+    """Generate dynamic charts based on user selections."""
+    if not n_clicks or not table_data or not x_axis:
+        return go.Figure()
+
+    df = pd.DataFrame(table_data)
+
+    # Handle empty dataframe
+    if df.empty:
+        return go.Figure().add_annotation(
+            text="No data available for plotting",
+            showarrow=False,
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+        )
+
+    try:
+        fig = go.Figure()
+
+        if chart_type == "bar":
+            # Perform aggregation based on user selection
+            if y_axis and aggregation != "count":
+                # Aggregate numeric column with specified function
+                if color_by:
+                    agg_func = getattr(
+                        df.groupby([x_axis, color_by])[y_axis], aggregation
+                    )
+                    grouped = agg_func().reset_index()
+                    for color_val in grouped[color_by].unique():
+                        data = grouped[grouped[color_by] == color_val]
+                        fig.add_trace(
+                            go.Bar(
+                                x=data[x_axis],
+                                y=data[y_axis],
+                                name=str(color_val),
+                                hovertemplate=f"<b>{x_axis.replace('_', ' ').title()}</b>: %{{x}}<br>"
+                                + f"<b>{aggregation.title()} of {y_axis.replace('_', ' ').title()}</b>: %{{y}}<br>"
+                                + f"<b>{color_by.replace('_', ' ').title()}</b>: {color_val}<extra></extra>",
+                            )
+                        )
+                else:
+                    agg_func = getattr(df.groupby(x_axis)[y_axis], aggregation)
+                    grouped = agg_func().reset_index()
+                    fig.add_trace(
+                        go.Bar(
+                            x=grouped[x_axis],
+                            y=grouped[y_axis],
+                            hovertemplate=f"<b>{x_axis.replace('_', ' ').title()}</b>: %{{x}}<br>"
+                            + f"<b>{aggregation.title()} of {y_axis.replace('_', ' ').title()}</b>: %{{y}}<extra></extra>",
+                        )
+                    )
+            else:
+                # Count occurrences (default behavior)
+                if color_by:
+                    grouped = (
+                        df.groupby([x_axis, color_by]).size().reset_index(name="count")
+                    )
+                    for color_val in grouped[color_by].unique():
+                        data = grouped[grouped[color_by] == color_val]
+                        fig.add_trace(
+                            go.Bar(
+                                x=data[x_axis],
+                                y=data["count"],
+                                name=str(color_val),
+                                hovertemplate=f"<b>{x_axis.replace('_', ' ').title()}</b>: %{{x}}<br>"
+                                + f"<b>Count</b>: %{{y}}<br>"
+                                + f"<b>{color_by.replace('_', ' ').title()}</b>: {color_val}<extra></extra>",
+                            )
+                        )
+                else:
+                    counts = df[x_axis].value_counts()
+                    fig.add_trace(
+                        go.Bar(
+                            x=counts.index,
+                            y=counts.values,
+                            hovertemplate=f"<b>{x_axis.replace('_', ' ').title()}</b>: %{{x}}<br>"
+                            + f"<b>Count</b>: %{{y}}<extra></extra>",
+                        )
+                    )
+
+        elif chart_type == "line":
+            # Perform aggregation for line charts
+            if y_axis and aggregation != "count":
+                if color_by:
+                    agg_func = getattr(
+                        df.groupby([x_axis, color_by])[y_axis], aggregation
+                    )
+                    grouped = agg_func().reset_index()
+                    for color_val in grouped[color_by].unique():
+                        data = grouped[grouped[color_by] == color_val]
+                        fig.add_trace(
+                            go.Scatter(
+                                x=data[x_axis],
+                                y=data[y_axis],
+                                mode="lines+markers",
+                                name=str(color_val),
+                                hovertemplate=f"<b>{x_axis.replace('_', ' ').title()}</b>: %{{x}}<br>"
+                                + f"<b>{aggregation.title()} of {y_axis.replace('_', ' ').title()}</b>: %{{y}}<br>"
+                                + f"<b>{color_by.replace('_', ' ').title()}</b>: {color_val}<extra></extra>",
+                            )
+                        )
+                else:
+                    agg_func = getattr(df.groupby(x_axis)[y_axis], aggregation)
+                    grouped = agg_func().reset_index()
+                    fig.add_trace(
+                        go.Scatter(
+                            x=grouped[x_axis],
+                            y=grouped[y_axis],
+                            mode="lines+markers",
+                            hovertemplate=f"<b>{x_axis.replace('_', ' ').title()}</b>: %{{x}}<br>"
+                            + f"<b>{aggregation.title()} of {y_axis.replace('_', ' ').title()}</b>: %{{y}}<extra></extra>",
+                        )
+                    )
+            else:
+                # Count occurrences
+                if color_by:
+                    grouped = (
+                        df.groupby([x_axis, color_by]).size().reset_index(name="count")
+                    )
+                    for color_val in grouped[color_by].unique():
+                        data = grouped[grouped[color_by] == color_val]
+                        fig.add_trace(
+                            go.Scatter(
+                                x=data[x_axis],
+                                y=data["count"],
+                                mode="lines+markers",
+                                name=str(color_val),
+                                hovertemplate=f"<b>{x_axis.replace('_', ' ').title()}</b>: %{{x}}<br>"
+                                + f"<b>Count</b>: %{{y}}<br>"
+                                + f"<b>{color_by.replace('_', ' ').title()}</b>: {color_val}<extra></extra>",
+                            )
+                        )
+                else:
+                    counts = df[x_axis].value_counts()
+                    fig.add_trace(
+                        go.Scatter(
+                            x=counts.index,
+                            y=counts.values,
+                            mode="lines+markers",
+                            hovertemplate=f"<b>{x_axis.replace('_', ' ').title()}</b>: %{{x}}<br>"
+                            + f"<b>Count</b>: %{{y}}<extra></extra>",
+                        )
+                    )
+
+        elif chart_type == "scatter":
+            if y_axis:
+                hover_text = (
+                    f"<b>{x_axis.replace('_', ' ').title()}</b>: %{{x}}<br>"
+                    + f"<b>{y_axis.replace('_', ' ').title()}</b>: %{{y}}<br>"
+                )
+                if color_by:
+                    hover_text += f"<b>{color_by.replace('_', ' ').title()}</b>: %{{text}}<extra></extra>"
+                else:
+                    hover_text += "<extra></extra>"
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=df[x_axis],
+                        y=df[y_axis],
+                        mode="markers",
+                        marker=dict(
+                            color=df[color_by] if color_by else None,
+                            colorscale="viridis",
+                            showscale=True if color_by else False,
+                        ),
+                        text=df[color_by] if color_by else None,
+                        hovertemplate=hover_text,
+                    )
+                )
+
+        elif chart_type == "pie":
+            counts = df[x_axis].value_counts()
+            fig.add_trace(
+                go.Pie(
+                    labels=counts.index,
+                    values=counts.values,
+                    hovertemplate="<b>%{label}</b><br>"
+                    + "Count: %{value}<br>"
+                    + "Percentage: %{percent}<extra></extra>",
+                )
+            )
+
+        elif chart_type == "box":
+            if y_axis:
+                if color_by:
+                    for color_val in df[color_by].unique():
+                        data = df[df[color_by] == color_val]
+                        fig.add_trace(
+                            go.Box(
+                                x=data[x_axis],
+                                y=data[y_axis],
+                                name=str(color_val),
+                                hovertemplate=f"<b>{x_axis.replace('_', ' ').title()}</b>: %{{x}}<br>"
+                                + f"<b>{y_axis.replace('_', ' ').title()}</b>: %{{y}}<br>"
+                                + f"<b>{color_by.replace('_', ' ').title()}</b>: {color_val}<extra></extra>",
+                            )
+                        )
+                else:
+                    fig.add_trace(
+                        go.Box(
+                            x=df[x_axis],
+                            y=df[y_axis],
+                            hovertemplate=f"<b>{x_axis.replace('_', ' ').title()}</b>: %{{x}}<br>"
+                            + f"<b>{y_axis.replace('_', ' ').title()}</b>: %{{y}}<extra></extra>",
+                        )
+                    )
+
+        elif chart_type == "histogram":
+            fig.add_trace(
+                go.Histogram(
+                    x=df[x_axis],
+                    nbinsx=20,
+                    hovertemplate=f"<b>{x_axis.replace('_', ' ').title()}</b>: %{{x}}<br>"
+                    + "<b>Count</b>: %{y}<extra></extra>",
+                )
+            )
+
+        # Update layout
+        y_title = f"{aggregation.title()}"
+        if y_axis and aggregation != "count":
+            y_title += f" of {y_axis.replace('_', ' ').title()}"
+
+        fig.update_layout(
+            title=f"{chart_type.title()} Chart: {x_axis.replace('_', ' ').title()}"
+            + (f" by {y_title}" if y_axis or aggregation else ""),
+            xaxis_title=x_axis.replace("_", " ").title(),
+            yaxis_title=y_title,
+            showlegend=True if color_by else False,
+            height=500,
+        )
+
+        return fig
+
+    except Exception as e:
+        return go.Figure().add_annotation(
+            text=f"Error generating chart: {str(e)}",
+            showarrow=False,
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+        )
 
 
 if __name__ == "__main__":
