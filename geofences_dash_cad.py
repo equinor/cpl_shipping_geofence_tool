@@ -684,6 +684,28 @@ def upload_geojson(contents, filename, current_children):
     return filtered + [uploaded_layer]
 
 
+def clean_wkt_string(wkt_string):
+    """
+    Clean WKT string by removing spaces before '(', after ')', and before/after commas.
+
+    Example: 'POLYGON ((-47.47, 59.21), (-50.99, 52.42))'
+    Becomes: 'POLYGON((-47.47,59.21),(-50.99,52.42))'
+    """
+    if not wkt_string:
+        return wkt_string
+
+    # Remove space before '('
+    wkt_string = wkt_string.replace(" (", "(")
+    # Remove space after ')'
+    wkt_string = wkt_string.replace(") ", ")")
+    # Remove space before ','
+    wkt_string = wkt_string.replace(" ,", ",")
+    # Remove space after ','
+    wkt_string = wkt_string.replace(", ", ",")
+
+    return wkt_string
+
+
 @app.callback(
     Output("polygon-coords", "children"),
     Input("draw-control", "geojson"),
@@ -694,12 +716,14 @@ def polygon_data(geojson, port_name, geofence_name):
     if not geojson or not geojson.get("features"):
         return "No polygon data"
     geom = shape(geojson["features"][0]["geometry"]).wkt
+    # Clean the WKT string to remove unwanted spaces
+    clean_geom = clean_wkt_string(geom)
     # Return geofence_name, port_name, and WKT coordinates as a JSON string
     out = json.dumps(
         {
             "geofence_name": geofence_name or "",
             "port_name": port_name or "",
-            "wkt_coordinates": geom,
+            "wkt_coordinates": clean_geom,
         }
     )
     return out
@@ -814,6 +838,7 @@ def deploy_geofence(n_clicks, payload):
         geofence_name = payload_dict.get("geofence_name")
         port_name = payload_dict.get("port_name")
         wkt_coordinates = payload_dict.get("wkt_coordinates")
+
         srid = 4326
 
         if not all([geofence_name, port_name, wkt_coordinates]):
