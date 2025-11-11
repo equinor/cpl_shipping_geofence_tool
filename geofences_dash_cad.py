@@ -1,5 +1,3 @@
-import base64
-import io
 import json
 import os
 import struct
@@ -17,9 +15,12 @@ from shapely.geometry import shape
 
 from utils.utils import (
     ENABLE_DELETE_BUTTON,
+    calculate_heading_angle,
+    clean_wkt_string,
     get_all_geofence_events_from_cad,
     get_trajectories,
     get_trajectory_cargo,
+    parse_contents,
     populate_geofences_from_cad,
 )
 
@@ -68,23 +69,6 @@ else:
     )
 
 
-# Parse uploaded geojson
-def parse_contents(contents, filename):
-    """
-    Parse uploaded geojson file contents and return the geojson dict.
-    """
-    content_type, content_string = contents.split(",")
-    decoded = base64.b64decode(content_string)
-    try:
-        if filename.lower().endswith(".geojson") or filename.lower().endswith(".json"):
-            geojson_data = json.load(io.StringIO(decoded.decode("utf-8")))
-            return geojson_data
-    except Exception as e:
-        print(f"Error parsing geojson: {e}")
-        return None
-    return None
-
-
 # Initialize Dash app
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 
@@ -126,6 +110,7 @@ app.validation_layout = html.Div(
         html.Button(id="export-trajectory-btn"),
         html.Button(id="export-table-btn"),
         html.Button(id="generate-chart-btn"),
+        html.Button(id="deploy-idle-geofence-btn"),
         dcc.Input(id="duration"),
         dcc.Dropdown(id="vessel-dropdown"),
         dcc.Dropdown(id="chart-type-dropdown"),
@@ -141,6 +126,8 @@ app.validation_layout = html.Div(
         dcc.Download(id="download-trajectories"),
         dcc.Download(id="download-table"),
         html.Div(id="trajectory-output"),
+        html.Pre(id="deploy-idle-response"),
+        html.Pre(id="heading-display"),
         dcc.ConfirmDialog(id="confirm-delete"),
         dash.dash_table.DataTable(id="geofence-table"),
     ]
@@ -176,7 +163,16 @@ def render_content(tab):
                                 dl.FeatureGroup(
                                     [
                                         dl.EditControl(
-                                            id="draw-control", position="topleft"
+                                            id="draw-control",
+                                            position="topleft",
+                                            draw=dict(
+                                                polyline=True,
+                                                polygon=True,
+                                                circle=False,
+                                                rectangle=False,
+                                                marker=False,
+                                                circlemarker=False,
+                                            ),
                                         )
                                     ]
                                 ),
@@ -193,13 +189,41 @@ def render_content(tab):
                             id="polygon-coords",
                             style={"whiteSpace": "pre-wrap", "wordBreak": "break-all"},
                         ),
-                        # A button to write the polygons to the [sm].[geofences_v1r0]
-                        html.Button(
-                            "Deploy Geofence", id="deploy-geofence-btn", n_clicks=0
+                        # Buttons to write the polygons to different tables
+                        html.Div(
+                            [
+                                html.Button(
+                                    "Deploy Geofence",
+                                    id="deploy-geofence-btn",
+                                    n_clicks=0,
+                                    style={"marginRight": "10px"},
+                                ),
+                                html.Button(
+                                    "Deploy Idle Geofence",
+                                    id="deploy-idle-geofence-btn",
+                                    n_clicks=0,
+                                ),
+                            ],
+                            style={"marginBottom": "10px"},
+                        ),
+                        html.Pre(
+                            "Heading angle will be shown here when a line is drawn",
+                            id="heading-display",
+                            style={
+                                "whiteSpace": "pre-wrap",
+                                "wordBreak": "break-all",
+                                "backgroundColor": "#f0f0f0",
+                                "padding": "10px",
+                            },
                         ),
                         html.Pre(
                             "Response from deployment will be shown here",
                             id="deploy-response",
+                            style={"whiteSpace": "pre-wrap", "wordBreak": "break-all"},
+                        ),
+                        html.Pre(
+                            "Response from idle geofence deployment will be shown here",
+                            id="deploy-idle-response",
                             style={"whiteSpace": "pre-wrap", "wordBreak": "break-all"},
                         ),
                     ]
@@ -684,49 +708,71 @@ def upload_geojson(contents, filename, current_children):
     return filtered + [uploaded_layer]
 
 
-def clean_wkt_string(wkt_string):
-    """
-    Clean WKT string by removing spaces before '(', after ')', and before/after commas.
-
-    Example: 'POLYGON ((-47.47, 59.21), (-50.99, 52.42))'
-    Becomes: 'POLYGON((-47.47,59.21),(-50.99,52.42))'
-    """
-    if not wkt_string:
-        return wkt_string
-
-    # Remove space before '('
-    wkt_string = wkt_string.replace(" (", "(")
-    # Remove space after ')'
-    wkt_string = wkt_string.replace(") ", ")")
-    # Remove space before ','
-    wkt_string = wkt_string.replace(" ,", ",")
-    # Remove space after ','
-    wkt_string = wkt_string.replace(", ", ",")
-
-    return wkt_string
-
-
 @app.callback(
-    Output("polygon-coords", "children"),
+    [Output("polygon-coords", "children"), Output("heading-display", "children")],
     Input("draw-control", "geojson"),
     Input("port_name", "value"),
     Input("geofence_name", "value"),
 )
 def polygon_data(geojson, port_name, geofence_name):
     if not geojson or not geojson.get("features"):
-        return "No polygon data"
-    geom = shape(geojson["features"][0]["geometry"]).wkt
-    # Clean the WKT string to remove unwanted spaces
-    clean_geom = clean_wkt_string(geom)
-    # Return geofence_name, port_name, and WKT coordinates as a JSON string
-    out = json.dumps(
-        {
-            "geofence_name": geofence_name or "",
-            "port_name": port_name or "",
-            "wkt_coordinates": clean_geom,
-        }
-    )
-    return out
+        return (
+            "No polygon data",
+            "Heading angle will be shown here when a line is drawn",
+        )
+
+    feature = geojson["features"][0]
+    geometry = feature["geometry"]
+    geometry_type = geometry.get("type", "")
+
+    # Handle different geometry types
+    if geometry_type == "LineString":
+        # Calculate heading for polylines
+        coordinates = geometry["coordinates"]
+        if len(coordinates) >= 2:
+            start_point = coordinates[0]
+            end_point = coordinates[-1]
+            heading = calculate_heading_angle(start_point, end_point)
+
+            # Create line info
+            line_info = {
+                "geometry_type": "LineString",
+                "start_point": start_point,
+                "end_point": end_point,
+                "coordinates": coordinates,
+            }
+
+            heading_text = f"Polyline Heading: {heading:.1f}° (from North)\n"
+            heading_text += (
+                f"Start Point: [{start_point[0]:.6f}, {start_point[1]:.6f}]\n"
+            )
+            heading_text += f"End Point: [{end_point[0]:.6f}, {end_point[1]:.6f}]\n"
+            heading_text += f"Total Points: {len(coordinates)}"
+
+            return json.dumps(line_info), heading_text
+        else:
+            return "Invalid line data", "Need at least 2 points to calculate heading"
+
+    elif geometry_type == "Polygon":
+        # Handle polygons as before
+        geom = shape(geometry).wkt
+        clean_geom = clean_wkt_string(geom)
+
+        out = json.dumps(
+            {
+                "geofence_name": geofence_name or "",
+                "port_name": port_name or "",
+                "wkt_coordinates": clean_geom,
+            }
+        )
+
+        return out, "Polygon drawn - no heading calculated for polygons"
+
+    else:
+        return (
+            f"Unsupported geometry type: {geometry_type}",
+            "Heading calculation not available for this geometry type",
+        )
 
 
 def _child_id(child):
@@ -859,6 +905,49 @@ def deploy_geofence(n_clicks, payload):
         return f"Geofence deployed successfully: {response}"
     except Exception as e:
         return f"Error deploying geofence: {e}"
+
+
+@app.callback(
+    Output("deploy-idle-response", "children"),
+    Input("deploy-idle-geofence-btn", "n_clicks"),
+    State("polygon-coords", "children"),
+    prevent_initial_call=True,
+)
+def deploy_idle_geofence(n_clicks, payload):
+    if n_clicks is None or n_clicks == 0:
+        return None
+    global CONNECTION_ERROR
+    if CONNECTION_ERROR:
+        return (
+            f"Cannot deploy idle geofence due to connection error: {CONNECTION_ERROR}"
+        )
+    try:
+        payload_dict = json.loads(payload)
+        # Extract geofence_name, port_name, and wkt_coordinates from payload
+        geofence_name = payload_dict.get("geofence_name")
+        port_name = payload_dict.get("port_name")
+        wkt_coordinates = payload_dict.get("wkt_coordinates")
+
+        srid = 5326
+
+        if not all([geofence_name, port_name, wkt_coordinates]):
+            return (
+                "Missing required fields: geofence_name, port_name, or wkt_coordinates."
+            )
+
+        cursor = conn.cursor()
+        insert_query = """
+            INSERT INTO [sm].[geofences_idle_v1r0] ([geofence_name], [port_name], [wkt_coordinates], [srid])
+            VALUES (?, ?, ?, ?)
+        """
+        cursor.execute(insert_query, (geofence_name, port_name, wkt_coordinates, srid))
+        conn.commit()
+        cursor.close()
+        # Get response from the cursor (rowcount for insert)
+        response = f"Inserted into [sm].[geofences_idle_v1r0] table. Rows affected: {cursor.rowcount}"
+        return f"Idle geofence deployed successfully: {response}"
+    except Exception as e:
+        return f"Error deploying idle geofence: {e}"
 
 
 @app.callback(

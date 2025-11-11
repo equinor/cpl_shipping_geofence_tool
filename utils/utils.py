@@ -1,4 +1,7 @@
+import base64
+import io
 import json
+import math
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -9,6 +12,72 @@ from utils.cdf import get_cognite_client
 
 # Configuration settings
 ENABLE_DELETE_BUTTON = False  # Set to True to enable the delete functionality
+
+
+def parse_contents(contents, filename):
+    """
+    Parse uploaded geojson file contents and return the geojson dict.
+    """
+    content_type, content_string = contents.split(",")
+    decoded = base64.b64decode(content_string)
+    try:
+        if filename.lower().endswith(".geojson") or filename.lower().endswith(".json"):
+            geojson_data = json.load(io.StringIO(decoded.decode("utf-8")))
+            return geojson_data
+    except Exception as e:
+        print(f"Error parsing geojson: {e}")
+        return None
+    return None
+
+
+def clean_wkt_string(wkt_string):
+    """
+    Clean WKT string by removing spaces before '(', after ')', and before/after commas.
+
+    Example: 'POLYGON ((-47.47, 59.21), (-50.99, 52.42))'
+    Becomes: 'POLYGON((-47.47,59.21),(-50.99,52.42))'
+    """
+    if not wkt_string:
+        return wkt_string
+
+    # Remove space before '('
+    wkt_string = wkt_string.replace(" (", "(")
+    # Remove space after ')'
+    wkt_string = wkt_string.replace(") ", ")")
+    # Remove space before ','
+    wkt_string = wkt_string.replace(" ,", ",")
+    # Remove space after ','
+    wkt_string = wkt_string.replace(", ", ",")
+
+    return wkt_string
+
+
+def calculate_heading_angle(start_point, end_point):
+    """
+    Calculate the heading angle (bearing) between two points in degrees.
+
+    Args:
+        start_point: [longitude, latitude] of start point
+        end_point: [longitude, latitude] of end point
+
+    Returns:
+        Heading angle in degrees (0-360, where 0/360 is North)
+    """
+    lon1, lat1 = math.radians(start_point[0]), math.radians(start_point[1])
+    lon2, lat2 = math.radians(end_point[0]), math.radians(end_point[1])
+
+    dlon = lon2 - lon1
+
+    y = math.sin(dlon) * math.cos(lat2)
+    x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(
+        dlon
+    )
+
+    bearing = math.atan2(y, x)
+    bearing = math.degrees(bearing)
+    bearing = (bearing + 360) % 360  # Normalize to 0-360
+
+    return bearing
 
 
 def get_all_geofences(client):
@@ -63,7 +132,7 @@ def get_all_geofence_events_from_cad(conn, geofence, period):
     cursor = conn.cursor()
     cursor.execute(
         f"""
-        SELECT * FROM [sm].[geofence_events_v3r0]
+        SELECT * FROM [sm].[geofence_events_v3r1]
         WHERE GEOFENCE = '{geofence}'
     """
     )
@@ -119,7 +188,7 @@ def get_trajectories(conn, start_time, end_time, vessel_type, geofences):
                 ge."VESSEL_KEY" AS vessel_key,
                 ge."GEOFENCE"   AS geofence,
                 COALESCE(ge."EXIT_TIME", ge."ENTRY_TIME") AS passage_time
-            FROM sm.geofence_events_v3r0 AS ge
+            FROM sm.geofence_events_v3r1 AS ge
             JOIN sm.current_vessel_positions_v1r0 AS cvp
                 ON cvp.imo = ge."IMO"
             WHERE CAST(COALESCE(ge."EXIT_TIME", ge."ENTRY_TIME") AS date)
