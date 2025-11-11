@@ -17,9 +17,13 @@ from utils.utils import (
     ENABLE_DELETE_BUTTON,
     calculate_heading_angle,
     clean_wkt_string,
+    delete_geofence_from_spark_table,
     get_all_geofence_events_from_cad,
+    get_spark_session,
     get_trajectories,
     get_trajectory_cargo,
+    insert_geofences_into_spark_table,
+    insert_geofences_into_sql,
     parse_contents,
     populate_geofences_from_cad,
 )
@@ -68,6 +72,7 @@ else:
         f"Token error: {result.get('error')} {result.get('error_description')}"
     )
 
+spark = get_spark_session()
 
 # Initialize Dash app
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
@@ -833,6 +838,8 @@ def delete_geofence(submit_n_clicks, geofence_name, current_children):
         affected = cursor.rowcount
         conn.commit()
         cursor.close()
+        # Also delete from spark geofences table
+        spark_delete = delete_geofence_from_spark_table(spark, geofence_name)
     except Exception as e:
         return (
             f"Error deleting geofence '{geofence_name}': {e}",
@@ -880,29 +887,21 @@ def deploy_geofence(n_clicks, payload):
         return f"Cannot deploy geofence due to connection error: {CONNECTION_ERROR}"
     try:
         payload_dict = json.loads(payload)
-        # Extract geofence_name, port_name, and wkt_coordinates from payload
+        # Writing the geofence to the CAD geofences table
         geofence_name = payload_dict.get("geofence_name")
         port_name = payload_dict.get("port_name")
         wkt_coordinates = payload_dict.get("wkt_coordinates")
-
-        srid = 4326
-
-        if not all([geofence_name, port_name, wkt_coordinates]):
-            return (
-                "Missing required fields: geofence_name, port_name, or wkt_coordinates."
+        sql_write, message = insert_geofences_into_sql(
+            conn, geofence_name, port_name, wkt_coordinates, srid=4326
+        )
+        # Writing the geofence to the spark geofences table
+        if sql_write:
+            spark_write = insert_geofences_into_spark_table(
+                spark, geofence_name, port_name, wkt_coordinates, 0
             )
-
-        cursor = conn.cursor()
-        insert_query = """
-            INSERT INTO [sm].[geofences_v1r0] ([geofence_name], [port_name], [wkt_coordinates], [srid])
-            VALUES (?, ?, ?, ?)
-        """
-        cursor.execute(insert_query, (geofence_name, port_name, wkt_coordinates, srid))
-        conn.commit()
-        cursor.close()
-        # Get response from the cursor (rowcount for insert)
-        response = f"Inserted into [sm].[geofences_v1r0] table. Rows affected: {cursor.rowcount}"
-        return f"Geofence deployed successfully: {response}"
+            return f"Geofence deployed successfully: {message}\nSpark Table Write: {spark_write}"
+        else:
+            return f"Geofence deployment failed: {message}"
     except Exception as e:
         return f"Error deploying geofence: {e}"
 
